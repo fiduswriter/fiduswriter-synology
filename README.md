@@ -1,60 +1,89 @@
 # Fidus Writer on Synology
 
 This repository packages [Fidus Writer](https://fiduswriter.org) as a
-[Synology DSM](https://www.synology.com/dsm) package (SPK) using
-[moritzfl's synology-docker-bridge](https://github.com/moritzfl/synology-docker-bridge).
-It is part of the Fidus Writer 5.0 family of host integrations, alongside the
+[Synology DSM](https://www.synology.com/dsm) package (SPK), and holds the
+small Django app that ties Fidus Writer's authentication to Synology's. It
+is part of the Fidus Writer 5.0 family of host integrations, alongside the
 Nextcloud and WordPress versions.
 
 Fidus Writer is an online collaborative editor made for academics who need
 citations and/or formulas. It focuses on content rather than layout, so the
 same text can later be published in multiple formats: website, printed book
-or ebook.
+or ebook. On Synology it runs the **full server** — including real-time
+collaboration through the Rust-based Aethonan websocket route — not the
+file-based DAV variant.
+
+## Thanks
+
+This integration builds on
+[moritzfl's synology-docker-bridge](https://github.com/moritzfl/synology-docker-bridge)
+and on his prototype of Fidus Writer on Synology
+([fiduswriter/fiduswriter#1427](https://github.com/fiduswriter/fiduswriter/issues/1427)).
+Thank you, Moritz, for both the generic bridge and for exploring the
+Fidus Writer integration — the packaging here follows your approach
+closely.
 
 ## What the package gives you
 
 - **A first-party DSM app**: Fidus Writer opens in a normal DSM desktop
-  window and in the browser at `https://<nas>:<dsm-port>/fiduswriter/` (via
-  DSM Login Portal), on DSM's own ports and certificate — no extra port,
-  firewall rule or certificate exception.
-- **SSO with DSM accounts**: users signed in to DSM are signed in to
-  Fidus Writer automatically. User names, email addresses and full names
-  come from the DSM account; members of the DSM `administrators` group
-  become Fidus Writer administrators. No second sign-in, no user
-  provisioning.
+  window and at `https://<nas>:<dsm-port>/fiduswriter/` (Login Portal) and
+  its own web ports (defaults 8098/8099), on DSM's own certificate — no
+  extra firewall rule or certificate exception.
+- **SSO with DSM accounts, and direct access**: users signed in to DSM are
+  signed in to Fidus Writer automatically (names, email addresses and the
+  `administrators` group come from the DSM account). At the same time the
+  app can be used **without a DSM login** — Fidus Writer's own login and
+  registration pages work for local accounts, exactly like any standalone
+  Fidus Writer installation. See "Authentication model" below.
 - **Access control through DSM**: who may open the app is governed by DSM
-  **Application Privileges** (every user by default; administrators can
-  restrict it). Revoking the privilege ends the user's Fidus Writer
+  **Application Privileges**. Revoking the privilege ends the user's
   sessions, and removal from the DSM administrators group revokes admin
   rights on the next request.
 - **Settings in the DSM window**: administrators edit
   `configuration.py` (the standard Fidus Writer configuration) under
   **Manage → Settings**; a failed configuration is rolled back
   automatically.
-- **Share links for outsiders**: document share links keep working for
-  people without a DSM account (they are anonymous in Fidus Writer, as
-  they would be on any Fidus Writer server).
 
-## Architecture
+## Authentication model
 
-```
-DSM desktop window / Login Portal (DSM nginx, DSM certificate)
-  └─ bridge proxy (synology-docker-bridge)
-       ├─ adds identity headers for the signed-in DSM user:
-       │    Remote-User, Remote-Name, Remote-Email, Remote-Groups
-       │    + X-Bridge-Secret (random shared secret)
-       └─► fiduswriter container (official image, port 8000)
-                └─ synology.middleware.SynologyBridgeAuthMiddleware
-                     verifies X-Bridge-Secret against /data/.bridge-secret
-                     and logs the user in (auto-creating the account)
-```
+The bridge proxies the app and, for requests with a DSM session, adds the
+identity headers `Remote-User`, `Remote-Name`, `Remote-Email` and
+`Remote-Groups` plus a random `X-Bridge-Secret` that it keeps in the app
+data folder as `/data/.bridge-secret`. The `synology` Django app in this
+repository (`fiduswriter/synology/`) provides a middleware that:
 
-The Fidus Writer side is the bundled-but-optional `synology` Django app in
-[fiduswriter-server-backend](https://git.fiduswriter.org/fiduswriter/fiduswriter-server-backend)
-(`fiduswriter/synology/`). It only trusts the identity headers when the
-request carries the shared secret that the bridge keeps in the app data
-folder as `/data/.bridge-secret` (readable only by the app's user), so no
-other process on the NAS can pose as a user by sending the headers itself.
+- only trusts the identity headers when `X-Bridge-Secret` matches the
+  secret file (so no other process on the NAS can pose as a user),
+- logs the corresponding user in, creating the account on first use with
+  the DSM email address and full name, and mapping membership of the DSM
+  `administrators` group to Django staff/superuser (re-checked on every
+  request),
+- ends the sessions it created when the identity headers disappear (the
+  user signed out of DSM or lost the app privilege), while leaving
+  username/password sessions untouched.
+
+Every Fidus Writer URL is registered as a bridge *public path*, so
+requests **without** a DSM session still reach the app — Fidus Writer's own
+access checks apply, so document share links keep working for people
+without DSM accounts. The app's `csrftoken` and `sessionid` cookies are
+allowed on those paths, so local-account login sessions work too.
+
+Known gap: the bridge currently does not accept `/` itself as a public
+path, so a *session-less* visitor opening the bare root of the web port is
+sent through DSM sign-in first; every real page URL (login, documents,
+shares, …) works directly. Allowing a public root is a small upstream
+change we have asked the bridge for.
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `fiduswriter/synology/` | Django app: `SynologyBridgeAuthMiddleware`, tests. Pip-installable (`pip install fiduswriter-synology`); in development, symlink it into `fiduswriter-server-backend/fiduswriter/synology`. |
+| `packaging/app.json` | App config for the bridge's SPK generator. |
+| `packaging/Dockerfile` | Derived image: official Fidus Writer image + this package. |
+| `packaging/configuration.py` | Default `configuration.py` installed on first start (enables the middleware). |
+| `packaging/start.sh` | Installs the default config into `/data`, then runs the image's own start script. |
+| `packaging/icon.svg` | Package icon (the Fidus Writer logo). |
 
 ## Building the SPK
 
@@ -68,15 +97,17 @@ git checkout <pinned ref>
 (cd bridge && npm ci)
 
 # Validate the app config without building:
-node packaging/generate.mjs --config /path/to/fiduswriter-synology/packaging/app.json --check
+node packaging/generate.mjs \
+    --config /path/to/fiduswriter-synology/packaging/app.json --check
 
-# Build the SPK (pulls the image in app.json and embeds it):
-node packaging/generate.mjs --config /path/to/fiduswriter-synology/packaging/app.json
+# Build the SPK (builds the derived image and embeds it):
+node packaging/generate.mjs \
+    --config /path/to/fiduswriter-synology/packaging/app.json
 ```
 
-The result is `packaging/dist/fiduswriter-<version>-x86_64.spk` (add
-`--arch armv8` for ARM models). Install it through **Package Center →
-Manual Install**.
+The result is `packaging/dist/fiduswriter-<version>-x86_64.spk` (pass
+`--arch armv8` for ARM models — the Fidus Writer image is built for both
+x86_64 and aarch64). Install through **Package Center → Manual Install**.
 
 ## Installing on a NAS
 
@@ -100,18 +131,21 @@ The middleware is activated by these settings in `configuration.py`
 | `SYNOLOGY_BRIDGE_AUTO_CREATE_USERS` | `True` | Create Fidus Writer accounts for DSM users on first use. When `False`, only users that already exist can sign in. |
 
 Regular Fidus Writer settings (database, email, registration, …) work as
-on any installation; see
-`configuration-default.py` in fiduswriter-server-backend and the
+on any installation; see `configuration-default.py` in
+fiduswriter-server-backend and the
 [Fidus Writer documentation](https://fiduswriter.github.io/).
 
 ## Development
 
-The middleware's unit tests live in fiduswriter-server-backend
-(`fiduswriter/synology/tests.py`) and run with:
+The middleware's unit tests live in `fiduswriter/synology/tests.py` and
+run through the main application's test runner (per the pattern used by
+all Fidus Writer plugins):
 
 ```bash
 cd fiduswriter-server-backend/fiduswriter
+ln -s ../../fiduswriter-synology/fiduswriter/synology synology
 python manage.py test synology
+rm synology
 ```
 
 ## License
