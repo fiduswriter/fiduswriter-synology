@@ -8,9 +8,10 @@
     "descriptionGer": "Online-Kollaborationseditor für Akademiker — schreiben mit Zitaten und Formeln, veröffentlichen in mehreren Formaten.",
     "maintainer": "Fidus Writer Team",
     "image": "fiduswriter-synology:spk",
+    "appDir": "..",
     "appBuild": "docker build -t fiduswriter-synology:spk -f packaging/Dockerfile .",
     "containerPort": 8000,
-    "icon": "icon.svg",
+    "icons": "packaging/icons",
     "allUsers": true,
     "identityHeaders": true,
     "appAuthenticatesRequests": true,
@@ -37,8 +38,8 @@
     ],
     "publicCookies": ["csrftoken", "sessionid"],
     "files": {
-        "/etc/fiduswriter-synology/configuration.py": "configuration.py",
-        "/etc/fiduswriter-synology/start.sh": "start.sh"
+        "/etc/fiduswriter-synology/configuration.py": "packaging/configuration.py",
+        "/etc/fiduswriter-synology/start.sh": "packaging/start.sh"
     },
     "command": ["sh", "/etc/fiduswriter-synology/start.sh"],
     "configFile": {

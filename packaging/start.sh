@@ -11,4 +11,11 @@ if ! [ -f /data/configuration.py ]; then
     cp /etc/fiduswriter-synology/configuration.py /data/configuration.py
 fi
 
+# The bridge's settings editor writes this file as root with mode 600,
+# which the app (running as its own non-root user) cannot read - the app
+# would then silently fall back to the base settings. Make sure it stays
+# readable on every start; the bridge restarts the app after each
+# settings save, so this also heals files written through the DSM window.
+chmod a+r /data/configuration.py 2>/dev/null || true
+
 exec /bin/sh /etc/start-fiduswriter.sh
