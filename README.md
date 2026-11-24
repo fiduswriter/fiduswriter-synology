@@ -109,6 +109,36 @@ The result is `packaging/dist/fiduswriter-<version>-x86_64.spk` (pass
 `--arch armv8` for ARM models — the Fidus Writer image is built for both
 x86_64 and aarch64). Install through **Package Center → Manual Install**.
 
+## Known gaps and upstream issues
+
+- **Public root path**: the bridge does not accept `/` itself as a public
+  path, so a *session-less* visitor opening the bare root of the web port
+  is sent through DSM sign-in first; every real page URL (login,
+  documents, shares, …) works directly. Allowing a public root is a small
+  upstream change we have asked the bridge for.
+- **Config file permissions**
+  ([bridge#8](https://github.com/moritzfl/synology-docker-bridge/issues/8)):
+  the bridge's settings editor writes `configuration.py` root-owned with
+  mode 600, which the non-root app cannot read. `start.sh` re-creates the
+  file with correct ownership when it is missing and keeps it readable
+  when it owns it; until the bridge writes world-readable files, use File
+  Station to fix permissions if the app ever falls back to the default
+  settings after a settings change.
+- **Image tar format**
+  ([bridge#9](https://github.com/moritzfl/synology-docker-bridge/issues/9)):
+  on Docker hosts with the containerd image store, `docker save` emits an
+  OCI layout that DSM's package importer rejects ("Import failed:
+  /var/packages/fiduswriter/target/image.tar"). Run
+  `scripts/repack-docker-archive.sh <spk> fiduswriter-synology:spk
+  fiduswriter-bridge:spk` after `generate.mjs` to convert the embedded
+  tar to the classic docker-archive format (needs podman).
+- **NAS-side networking**: the web ports are served by DSM's nginx on the
+  NAS's own addresses. Browsers on the LAN must be able to resolve the
+  DSM host name to the NAS (NAT hairpinning or a local DNS override) for
+  the DSM desktop window to embed the app, and the NAS certificate must
+  be trusted on the app port the first time. Everything also works
+  directly via the web ports (e.g. `https://<nas-ip>:8099/`).
+
 ## Installing on a NAS
 
 1. Install **Container Manager** from Package Center (the SPK declares it
