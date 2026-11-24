@@ -109,6 +109,34 @@ The result is `packaging/dist/fiduswriter-<version>-x86_64.spk` (pass
 `--arch armv8` for ARM models — the Fidus Writer image is built for both
 x86_64 and aarch64). Install through **Package Center → Manual Install**.
 
+## Which user the app runs as
+
+`app.json` sets `"appUser": "0:0"`: the app container runs as root, which is
+what the bridge generates by default and what most DSM packages do. This is
+a deliberate choice after the field test on a DS1019+ showed the
+alternatives broken:
+
+- The Fidus Writer image's own user is uid 999. Docker resolves the
+  `user: "fiduswriter"` line against the image's passwd, so the container
+  runs as uid 999 — **not** the DSM package user (`fiduswriter`, a
+  high uid such as 213894 assigned by DSM at install). DSM grants the
+  package's data share to that DSM user, so the app cannot read or write
+  `/data` at all (DisallowedHost on the real hostname, then
+  "Container stopped unexpectedly" on the next restart when an
+  unreadable `configuration.py` exists).
+- `appUser: "package"` would run the container as the DSM package user
+  with the share granted on install — the intended bridge design — but
+  the Fidus Writer image keeps all writable state (database, media,
+  `static-transpile`, `.transpile`) in the image directory owned by uid
+  999, so it cannot run as an arbitrary uid without image changes
+  (making `PROJECT_PATH` point at `/data`).
+
+Running as root inside the container lets the app use the share
+regardless of DSM's ACLs. The container is still only reachable through
+the bridge (which itself runs as root with the Docker socket, like all
+bridge packages). A hardening pass could make the image uid-agnostic and
+switch to `appUser: "package"`.
+
 ## Known gaps and upstream issues
 
 - **Public root path**: the bridge does not accept `/` itself as a public
@@ -119,11 +147,9 @@ x86_64 and aarch64). Install through **Package Center → Manual Install**.
 - **Config file permissions**
   ([bridge#8](https://github.com/moritzfl/synology-docker-bridge/issues/8)):
   the bridge's settings editor writes `configuration.py` root-owned with
-  mode 600, which the non-root app cannot read. `start.sh` re-creates the
-  file with correct ownership when it is missing and keeps it readable
-  when it owns it; until the bridge writes world-readable files, use File
-  Station to fix permissions if the app ever falls back to the default
-  settings after a settings change.
+  mode 600. With the app running as root (see above) this no longer
+  breaks the app; it still surprises File Station users. `start.sh`
+  re-creates the file when it is missing.
 - **Image tar format**
   ([bridge#9](https://github.com/moritzfl/synology-docker-bridge/issues/9)):
   on Docker hosts with the containerd image store, `docker save` emits an
@@ -138,6 +164,12 @@ x86_64 and aarch64). Install through **Package Center → Manual Install**.
   the DSM desktop window to embed the app, and the NAS certificate must
   be trusted on the app port the first time. Everything also works
   directly via the web ports (e.g. `https://<nas-ip>:8099/`).
+- **Admin pages in the image**: the Fidus Writer image runs its startup
+  transpile with the working directory at `/fiduswriter`, so the
+  staff-only admin bundles that import `../../base/assets/...` fail to
+  resolve there (the main editor bundles compile fine). Cosmetic for the
+  Synology use case; a fix belongs in the image (run with the project
+  path where the apps live).
 
 ## Installing on a NAS
 

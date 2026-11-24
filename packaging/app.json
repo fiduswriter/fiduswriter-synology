@@ -15,6 +15,7 @@
     "allUsers": true,
     "identityHeaders": true,
     "appAuthenticatesRequests": true,
+    "appUser": "0:0",
     "webPorts": {
         "http": 8098,
         "https": 8099
